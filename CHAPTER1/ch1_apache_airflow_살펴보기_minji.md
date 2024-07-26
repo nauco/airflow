@@ -126,3 +126,134 @@ volumes:
 - Airflow 가 적합하지 않은 경우 
   - 스트리밍 (실시간 데이터 처리) 워크플로 및 처리에 적합하지 않을 수 있다. Airflow 자체가 배치 task & 반복적인 task 에 초점이 맞춰져 있음. 
   - 추가 및 삭제 task 가 빈번한 동적 파이프라인의 경우 적합하지 않을 수 있다. WebUI에서는 가장 최근 실행 버전에 대한 정의만 표현함. 
+
+
+### 코드 뜯어보기 - Webserver / Scheduler 
+```python 
+"""
+
+File : airflow/airflow/jobs/scheduler_job_runner.py
+
+"""
+
+    @retry_db_transaction
+    def _schedule_all_dag_runs(
+        self,
+        guard: CommitProhibitorGuard,
+        dag_runs: Iterable[DagRun],
+        session: Session,
+    ) -> list[tuple[DagRun, DagCallbackRequest | None]]:
+        """Make scheduling decisions for all `dag_runs`."""
+        callback_tuples = [(run, self._schedule_dag_run(run, session=session)) for run in dag_runs]
+        guard.commit()
+        return callback_tuples
+
+    def _schedule_dag_run(
+        self,
+        dag_run: DagRun,
+        session: Session,
+    ) -> DagCallbackRequest | None:
+        """
+        Make scheduling decisions about an individual dag run.
+
+        :param dag_run: The DagRun to schedule
+        :return: Callback that needs to be executed
+        """
+        trace_id = int(trace_utils.gen_trace_id(dag_run=dag_run, as_int=True))
+        span_id = int(trace_utils.gen_dag_span_id(dag_run=dag_run, as_int=True))
+        links = [{"trace_id": trace_id, "span_id": span_id}]
+
+        with Trace.start_span(
+            span_name="_schedule_dag_run", component="SchedulerJobRunner", links=links
+        ) as span:
+            span.set_attribute("dag_id", dag_run.dag_id)
+            span.set_attribute("run_id", dag_run.run_id)
+            span.set_attribute("run_type", dag_run.run_type)
+            callback: DagCallbackRequest | None = None
+
+            dag = dag_run.dag = self.dagbag.get_dag(dag_run.dag_id, session=session)
+            dag_model = DM.get_dagmodel(dag_run.dag_id, session)
+
+            if not dag or not dag_model:
+                self.log.error("Couldn't find DAG %s in DAG bag or database!", dag_run.dag_id)
+                return callback
+            
+            # start_date 를 기준으로 dag 를 실행하는 부분 
+            
+            if (
+                dag_run.start_date
+                and dag.dagrun_timeout
+                and dag_run.start_date < timezone.utcnow() - dag.dagrun_timeout
+            ):
+                dag_run.set_state(DagRunState.FAILED)
+                unfinished_task_instances = session.scalars(
+                    select(TI)
+                    .where(TI.dag_id == dag_run.dag_id)
+                    .where(TI.run_id == dag_run.run_id)
+                    .where(TI.state.in_(State.unfinished))
+                )
+                for task_instance in unfinished_task_instances:
+                    task_instance.state = TaskInstanceState.SKIPPED
+                    session.merge(task_instance)
+                session.flush()
+                self.log.info("Run %s of %s has timed-out", dag_run.run_id, dag_run.dag_id)
+
+                if self._should_update_dag_next_dagruns(
+                    dag, dag_model, last_dag_run=dag_run, session=session
+                ):
+                    dag_model.calculate_dagrun_date_fields(dag, dag.get_run_data_interval(dag_run))
+
+                callback_to_execute = DagCallbackRequest(
+                    full_filepath=dag.fileloc,
+                    dag_id=dag.dag_id,
+                    run_id=dag_run.run_id,
+                    is_failure_callback=True,
+                    processor_subdir=dag_model.processor_subdir,
+                    msg="timed_out",
+                )
+
+                dag_run.notify_dagrun_state_changed()
+                duration = dag_run.end_date - dag_run.start_date
+                Stats.timing(f"dagrun.duration.failed.{dag_run.dag_id}", duration)
+                Stats.timing("dagrun.duration.failed", duration, tags={"dag_id": dag_run.dag_id})
+                span.set_attribute("error", True)
+                if span.is_recording():
+                    span.add_event(
+                        name="error",
+                        attributes={
+                            "message": f"Run {dag_run.run_id} of {dag_run.dag_id} has timed-out",
+                            "duration": str(duration),
+                        },
+                    )
+                return callback_to_execute
+
+            if dag_run.execution_date > timezone.utcnow() and not dag.allow_future_exec_dates:
+                self.log.error("Execution date is in future: %s", dag_run.execution_date)
+                return callback
+
+            if not self._verify_integrity_if_dag_changed(dag_run=dag_run, session=session):
+                self.log.warning(
+                    "The DAG disappeared before verifying integrity: %s. Skipping.", dag_run.dag_id
+                )
+                return callback
+            # TODO[HA]: Rename update_state -> schedule_dag_run, ?? something else?
+            schedulable_tis, callback_to_run = dag_run.update_state(session=session, execute_callbacks=False)
+
+            if self._should_update_dag_next_dagruns(dag, dag_model, last_dag_run=dag_run, session=session):
+                dag_model.calculate_dagrun_date_fields(dag, dag.get_run_data_interval(dag_run))
+            # This will do one query per dag run. We "could" build up a complex
+            # query to update all the TIs across all the execution dates and dag
+            # IDs in a single query, but it turns out that can be _very very slow_
+            # see #11147/commit ee90807ac for more details
+            if span.is_recording():
+                span.add_event(
+                    name="schedule_tis",
+                    attributes={
+                        "message": "dag_run scheduling its tis",
+                        "schedulable_tis": [_ti.task_id for _ti in schedulable_tis],
+                    },
+                )
+            dag_run.schedule_tis(schedulable_tis, session, max_tis_per_query=self.job.max_tis_per_query)
+
+            return callback_to_run
+```

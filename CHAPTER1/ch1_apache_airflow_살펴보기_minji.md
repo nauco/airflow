@@ -128,7 +128,7 @@ volumes:
   - 추가 및 삭제 task 가 빈번한 동적 파이프라인의 경우 적합하지 않을 수 있다. WebUI에서는 가장 최근 실행 버전에 대한 정의만 표현함. 
 
 
-### 코드 뜯어보기 - Webserver / Scheduler 
+### 코드 뜯어보기 -  Scheduler 
 ```python 
 """
 

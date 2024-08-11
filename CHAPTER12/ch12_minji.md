@@ -54,7 +54,11 @@ Q. SequentialExecutor는 SQLite에 연결되지만 LocalExecutor 사용시에 My
   
 #### 4. KubernetesExecutor
 - k8s 에서 워크로드를 실행함. 
-
+- KubernetesExecutor 를 사용하면 Task 가 Pod에서 실행된다. 
+- DAG 파일 배포하는 방법
+  - PersistentVolume 사용해서 Pod간 공유 
+  - git sync 작업을 하는 컨테이너를 따로 두기 
+  - Docker Image에 DAG를 포함하여 빌드하기 
 
 ### Metastore 구성하기 
 - Metastore : Airflow 에서 일어나는 모든 일을 Metastore Database에 기록함. 

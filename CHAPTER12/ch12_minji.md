@@ -88,3 +88,9 @@ Q. SequentialExecutor는 SQLite에 연결되지만 LocalExecutor 사용시에 My
 - 대기열에 배치되면 가져와서 Task Instance 를 실행함. 
 - Metastore에 각 상태의 변경 사항을 등록함. 
 - Executor 내에서 Task 를 실행하면 -> Task 가 실패하더라도 airflow가 중단되지 않도록 Task 를 실행할 새 프로세스를 생성한다. 
+
+### Airflow 프로세스의 로그 확인하기 
+- Airflow 로그는 3가지이다. 트러블 슈팅할 때 3가지 로그를 볼 줄알면 될 것 같다.
+  - 웹 서버 로그 
+  - 스케줄러 로그 
+  - 태스크 로그 

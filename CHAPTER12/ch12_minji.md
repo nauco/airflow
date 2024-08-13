@@ -56,9 +56,15 @@ Q. SequentialExecutor는 SQLite에 연결되지만 LocalExecutor 사용시에 My
 - k8s 에서 워크로드를 실행함. 
 - KubernetesExecutor 를 사용하면 Task 가 Pod에서 실행된다. 
 - DAG 파일 배포하는 방법
+- 컨테이너 환경이 아닌 경우 
+  - 단일 노드 환경 : DAG 파일이 있는 디렉토리 액세스 권한이 있으면 구성 OK
+  - 다중 노드 환경 : NFS (네트워크 파일 시스템). 각각의 컴퓨터(노드) 마다 NFS 를 구성해주어야 함. 파일을 NFS에 저장해야 함. 
+  - 아예 puller DAG를 구성해서 5분 주기로 최신 DAG코드를 가져오도록 할 수도 있음  
+- 컨테이너 환경의 경우 
   - PersistentVolume 사용해서 Pod간 공유 
   - git sync 작업을 하는 컨테이너를 따로 두기 
   - Docker Image에 DAG를 포함하여 빌드하기 
+    - 설치 종속성 / DAG 코드 두 단계로 나눠서 관리하는 것이 좋다 -> 이미지를 두번 뜬다는 뜻? 
 
 ### Metastore 구성하기 
 - Metastore : Airflow 에서 일어나는 모든 일을 Metastore Database에 기록함. 
